@@ -1,0 +1,10 @@
+node_modules/
+*.log
+*.tmp
+.DS_Store
+# 本地运行产物（正常情况下这些都写在 ~/.dsh/ 下，不在仓库里）
+records.json
+structure-cache.json
+trace.log
+# 本地阅读材料：属于个人学习内容，不进仓库、也不会被 npm 打包
+paper/

@@ -1,0 +1,57 @@
+{
+  "name": "dsh-english-coach",
+  "version": "0.6.0",
+  "description": "DSH 插件的英语长难句分层诊断：拆主干/从句/修饰归属，用五类产出式标注（成分·指代·逻辑·词汇·表达）判定卡在哪一层，附成分树、先行词标注、从句边界括号与跨句画像。",
+  "license": "MIT",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./client.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "skills",
+    "client.js",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE"
+  ],
+  "dsh": {
+    "engines": {
+      "dsh": ">=0.1.1-rc.2"
+    },
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true
+    },
+    "skill": "./skills/english-sentence-doctor/SKILL.md"
+  },
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "dsh-plugin",
+    "english",
+    "grammar",
+    "sentence-analysis",
+    "long-sentence",
+    "translation",
+    "reading",
+    "cli-tool"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/USERNAME/dsh-english-coach.git"
+  },
+  "homepage": "https://github.com/USERNAME/dsh-english-coach#readme",
+  "bugs": {
+    "url": "https://github.com/USERNAME/dsh-english-coach/issues"
+  }
+}
