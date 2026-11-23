@@ -864,6 +864,9 @@ function RangeSentence({
       const noLogic = !!(work.probes
         && (work.probes.negators || []).length === 0
         && (work.probes.markers || []).length === 0);
+      /* ③ 逻辑只在「容易读反」的结构上出现（not…because / not all / 否定前移 / not until…）。
+         普通否定不渲染这一块——以前每句都出现，全是噪音。 */
+      const showLogic = !!(work.probes && (work.probes.scopeHints || []).length);
       const dim = (off) => ({
         opacity: off ? 0.4 : 1,
         pointerEvents: off ? 'none' : 'auto',
@@ -874,7 +877,7 @@ function RangeSentence({
       return box({ display: 'flex', flexDirection: 'column' },
         box({ ...cardStyle, padding: 12, marginBottom: 12 },
           box({ fontSize: 13, marginBottom: 4 }, '自己拆一遍'),
-          box({ ...body }, '先只管框范围：按住鼠标划过几个词，松手就存下一段。全部框完，再把下面的成分标签拖到对应的段上。别先看结构页——先看就等于抄答案。')),
+          box({ ...body }, '先只管框范围：按住鼠标划过几个词，松手就存下一段。全部框完，再把下面的成分标签拖到对应的段上。别先看结构页——先看就等于抄答案。不用先分析结构：直接拆，提交批改时会生成标准答案再对照。')),
 
         sep('① 成分', '框完所有段后，点段上的「命名」再点成分标签；块尾 × 取消这一段'),
         tokens.length
@@ -892,7 +895,7 @@ function RangeSentence({
             pickedId: work.pickedRange,
             onPickRange: actions.pickRange
           })
-          : box({ ...small, padding: 16 }, '先分析一句。'),
+          : box({ ...small, padding: 16 }, '这句话还没切出词来：先在上方输入或选中一句。'),
         box({ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 8 },
           ROLE_TAGS.map((tag) => tagButton(tag, () => actions.nameLatest(tag), roleColor(tag)))),
         unnamed.length
@@ -920,6 +923,23 @@ function RangeSentence({
           btn(false, '取为代词', () => { if (rSel.sel) { actions.takePron(rSel.sel); rSel.cancel(); } }, { disabled: !rSel.sel }),
           btn(false, '取为所指', () => { if (rSel.sel && work.refPending) { actions.takeTarget(rSel.sel); rSel.cancel(); } }, { disabled: !work.refPending || !rSel.sel }),
           work.refPending ? text({ ...small, color: T.warn }, '已选代词，再拖选所指') : null),
+        /* 候选制：选好代词后直接点候选，不必再拖选。
+           候选来自规则引擎（含 -ing 名词化与向右合并的名词短语），不需要模型。 */
+        (() => {
+          if (!work.refPending) return null;
+          const hit = (work.probes?.pronouns || []).find((p) => p.idx === work.refPending.start);
+          const cands = (hit && hit.candidates) || [];
+          if (!cands.length) {
+            return box({ ...small, marginTop: 6, color: T.label3 },
+              '这句代词前面没找到候选名词：多半是指前面整件事，用上面的拖选框出那一段。');
+          }
+          return box({ marginTop: 8, padding: '8px 10px', borderRadius: 6, background: T.bg2 },
+            text({ ...small, color: T.label2 }, '候选（点一个就记下；也可以继续用上面的拖选）：'),
+            box({ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 6 },
+              cands.map((c, i) => box({ key: i, display: 'flex', flexDirection: 'column', gap: 2 },
+                btn(false, c.text, () => actions.takeTarget({ start: c.start, end: c.end })),
+                c.maybePlural ? text({ fontSize: 10.5, color: T.label3 }, '可能是复数') : null))));
+        })(),
         refs.length ? box({}, refs.map((r, i) => listRow('r' + i, [
           box({ flex: '0 0 auto', fontSize: 13 }, tokens.slice(r.pron.start, r.pron.end).join(' ')),
           text({ fontSize: 12, color: T.label3 }, '→'),
@@ -927,11 +947,17 @@ function RangeSentence({
           del(() => actions.removeRef(i))
         ]))) : null),
 
-        sep('③ 逻辑', probeHint(work.probes, 'negators',
-          (list, p) => `本句否定词：${list.join('、')}${(p.markers || []).length ? `；引导词：${p.markers.join('、')}` : ''} —— 先选触发词，再选它管到哪儿`,
-          (work.probes && (work.probes.markers || []).length)
-            ? `本句没有否定词；有引导词：${work.probes.markers.join('、')}`
-            : '本句没有否定词或从句引导词，这一项可以跳过')),
+        (() => {
+          if (!showLogic) {
+            return box({ ...small, marginTop: 6, color: T.label3 },
+              '③ 逻辑：本句没有容易读反的否定结构（not…because / not all / 否定前移 / not until / 准否定词），这一项跳过。');
+          }
+          return box(null,
+        sep('③ 逻辑', (work.probes.scopeHints || []).length
+          ? `本句有 ${work.probes.scopeHints.length} 处容易读反的否定结构 —— 先选触发词，再选它管到哪儿`
+          : probeHint(work.probes, 'negators',
+            (list, p) => `本句否定词：${list.join('、')}${(p.markers || []).length ? `；引导词：${p.markers.join('、')}` : ''} —— 先选触发词，再选它管到哪儿`,
+            '本句没有否定词或从句引导词，这一项可以跳过')),
         box(dim(noLogic),
         h(RangeSentence, {
           tokens, compact: true,
@@ -956,6 +982,8 @@ function RangeSentence({
           box({ flex: 1, fontSize: 13 }, tokens.slice(r.scope.start, r.scope.end).join(' ')),
           del(() => actions.removeLogic(i))
         ]))) : null),
+          );
+        })(),
 
         sep('④ 生词', '拖选你不确定的词，写下你猜的意思——猜错才有诊断价值'),
         h(RangeSentence, {
@@ -976,11 +1004,13 @@ function RangeSentence({
             placeholder: '我猜它是……',
             style: { ...inputStyle, flex: '1 1 240px', height: 30 }
           }),
-          btn(false, '加入生词', () => { if (vSel.sel) { actions.commitWord(vSel.sel); vSel.cancel(); } }, { disabled: !vSel.sel })),
+          btn(false, '加入生词', () => { if (vSel.sel) { actions.commitWord(vSel.sel); vSel.cancel(); } }, { disabled: !vSel.sel }),
+          btn(false, '只标记 [?] 不猜', () => { if (vSel.sel) { actions.commitMark(vSel.sel); vSel.cancel(); } }, { disabled: !vSel.sel })),
         words.length ? box({ marginTop: 8 }, words.map((w, i) => listRow('w' + i, [
           box({ flex: '0 0 auto', fontSize: 13 }, tokens.slice(w.start, w.end).join(' ')),
-          text({ fontSize: 12, color: T.label3 }, '我猜：'),
-          box({ flex: 1, fontSize: 12.5, color: T.label2 }, w.guess || '（没写）'),
+          w.unknown && !w.guess
+            ? box({ flex: 1, fontSize: 12.5, color: T.warn }, '[?] 未标记意思 —— 别编，先让它空着')
+            : box({ flex: 1, fontSize: 12.5, color: T.label2 }, `我猜：${w.guess || '（没写）'}`),
           del(() => actions.removeWord(i))
         ]))) : null,
 
@@ -1008,8 +1038,8 @@ function RangeSentence({
     const structureReadyHint = (tokens) => Array.isArray(tokens) && tokens.length > 0;
 
     /* ── ③ 结果视图 ───────────────────────────────────────────────── */
-function VerdictView({ graded, tokens, onShowAnswer, showAnswer, structure }) {
-      if (!graded) return box({ ...body }, '先做标注并批改，这里给出五层的分数与错法。');
+function VerdictView({ graded, tokens, onShowAnswer, showAnswer, structure, sentence }) {
+      if (!graded) return box({ ...body }, '这一句还没有批改结果。左侧「本句批改」里如果有记录，点一条就能回放当次的完整结果。');
       const toks = Array.isArray(tokens) ? tokens : [];
       const sliceText = (a, b) => toks.slice(Number(a) || 0, Number(b) || 0).join(' ');
       const LAYERS = [
@@ -1122,13 +1152,92 @@ function VerdictView({ graded, tokens, onShowAnswer, showAnswer, structure }) {
             structure.translation ? box({ ...cardStyle, padding: 12, marginBottom: 10 },
               box(tinyLabel, '整句译文'),
               box({ fontSize: 13.5, marginTop: 3 }, structure.translation)) : null,
-            box({ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))', gap: 8, alignItems: 'start' },
-              (structure.parts || []).map((p, i) => h(PartCard, { key: i, part: p, tokens: structure.tokens || [], depth: 0, index: i + 1 })))
+            box(sectionTitle, '成分树'),
+            /* 与结构页「成分树」保持同一套渲染参数：grid 换成纵向 column，
+               并补上 num / siblings —— 少了它们，顶层没有编号、子层从 1 重数、
+               「≈ 修饰「…」」挂靠提示也会整块消失（modifierTarget 拿不到 siblings 就返回 null） */
+            box({ display: 'flex', flexDirection: 'column', gap: 10 },
+              (structure.parts || []).map((p, i) => h(PartCard, { key: i, part: p, tokens: structure.tokens || [], depth: 0, num: String(i + 1), siblings: structure.parts })))
           ) : null)
       );
     }
 
     
+    /* ── 历史回放：一次批改的完整明细（只读，不改当前作业）────────── */
+    function AttemptDetail({ attempt }) {
+      if (!attempt) return null;
+      const d = attempt.detail;
+      const when = String(attempt.ts || "").replace("T", " ").slice(0, 16);
+      const head = `第 ${attempt.seq || "?"} 次 · ${when}`;
+      const scores = attempt.scores || {};
+      const chip = (k, label) => text({
+        fontSize: 11.5,
+        color: scores[k] == null ? T.label3 : (scores[k] >= 80 ? T.ok : T.bad)
+      }, `${label} ${scores[k] == null ? "–" : scores[k]}`);
+
+      if (!d) {
+        return box({ ...cardStyle, padding: 12, display: 'flex', flexDirection: 'column', gap: 4 },
+          box({ fontSize: 12.5, fontWeight: 600 }, head),
+          box({ display: 'flex', gap: 10, flexWrap: 'wrap' }, chip('S', '句法'), chip('R', '指代'), chip('L', '逻辑'), chip('V', '词汇'), chip('E', '表达')),
+          box({ ...small, marginTop: 4 }, '这条是旧格式记录，只存了分数，没有标注明细。'));
+      }
+
+      const tk = d.tokens || [];
+      const seg = (s) => tk.slice(s?.start ?? 0, s?.end ?? 0).join(' ');
+      const verdicts = d.verdicts || {};
+      const comments = [];
+      for (const k of ['S', 'R', 'L', 'V', 'E']) {
+        for (const r of (verdicts[k] || [])) if (r && r.comment) comments.push(`[${k}] ${r.comment}`);
+      }
+      const row = (label, value) => box({ display: 'flex', gap: 8, alignItems: 'baseline' },
+        text({ flex: '0 0 auto', fontSize: 11.5, color: T.label3 }, label),
+        box({ flex: 1, fontSize: 12.5, color: T.label1, wordBreak: 'break-word' }, value));
+
+      return box({ ...cardStyle, padding: 12, display: 'flex', flexDirection: 'column', gap: 5 },
+        box({ fontSize: 12.5, fontWeight: 600 }, head),
+        box({ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 2 },
+          chip('S', '句法'), chip('R', '指代'), chip('L', '逻辑'), chip('V', '词汇'), chip('E', '表达')),
+        (d.spans || []).length
+          ? box({ display: 'flex', flexDirection: 'column', gap: 3 },
+            text({ ...tinyLabel }, '你标的成分'),
+            ...(d.spans || []).map((s, i) => row(`${i + 1}. ${s.role}`, seg(s))))
+          : null,
+        (d.refs || []).length
+          ? box({ display: 'flex', flexDirection: 'column', gap: 3 },
+            text({ ...tinyLabel }, '你标的指代'),
+            ...(d.refs || []).map((r, i) => {
+              const v = (verdicts.R || [])[i];
+              const mark = v ? (v.verdict === 'correct' ? '✓' : v.verdict === 'partial' ? '△' : '✗') : '';
+              return row(`${mark} ${seg(r.pron)} → ${seg(r.target)}`, v?.expected ? `标准：${v.expected}` : '');
+            }))
+          : null,
+        (d.logic || []).length
+          ? box({ display: 'flex', flexDirection: 'column', gap: 3 },
+            text({ ...tinyLabel }, '你标的否定范围'),
+            ...(d.logic || []).map((p) => row(`${seg(p.trigger)} 管到`, seg(p.scope))))
+          : null,
+        (d.words || []).length
+          ? box({ display: 'flex', flexDirection: 'column', gap: 3 },
+            text({ ...tinyLabel }, '生词'),
+            ...(d.words || []).map((w) => row(seg(w), w.unknown && !w.guess ? '[?] 未标记意思' : `猜：${w.guess || '（空）'}`)))
+          : null,
+        d.translation
+          ? box({ display: 'flex', flexDirection: 'column', gap: 3 },
+            text({ ...tinyLabel }, '你的译文'),
+            box({ fontSize: 12.5, lineHeight: '20px', color: T.label1 }, d.translation))
+          : null,
+        comments.length
+          ? box({ display: 'flex', flexDirection: 'column', gap: 3, marginTop: 2 },
+            text({ ...tinyLabel }, '批改要点'),
+            ...comments.slice(0, 6).map((c, i) => text({ key: i, fontSize: 12, color: T.label2, lineHeight: '19px' }, c)))
+          : null,
+        (d.answer || []).length
+          ? box({ display: 'flex', flexDirection: 'column', gap: 2, marginTop: 2 },
+            text({ ...tinyLabel }, '当次的标准答案'),
+            ...(d.answer || []).slice(0, 10).map((p, i) => row(p.role, p.text)))
+          : null);
+    }
+
     /* ── ④ 画像 ──────────────────────────────────────────────────── */
     function ProfileView({ profile, onReload }) {
       if (!profile) {
@@ -1136,6 +1245,21 @@ function VerdictView({ graded, tokens, onShowAnswer, showAnswer, structure }) {
           box(body, '做满几句之后，这里显示你长期卡在哪一层。'),
           btn(false, '载入画像', onReload));
       }
+      const [openedRec, setOpenedRec] = useState(null);
+      const [recLoading, setRecLoading] = useState(false);
+      /* 点历史条目：先拉这一句的全部批改，再按 ts 找到当次，展示明细 */
+      const openRecord = async (rec) => {
+        if (!rec) return;
+        setRecLoading(true);
+        try {
+          const res = await apiPost('/attempts', { sentence: rec.sentence });
+          const hit = (res.attempts || []).find((a) => a.ts === rec.ts) || null;
+          setOpenedRec(hit);
+        } catch { setOpenedRec(null); } finally { setRecLoading(false); }
+      };
+      const scoreLine = (r) => ['S', 'R', 'L', 'V', 'E']
+        .map((k) => (r?.scores?.[k] == null ? null : `${k}${r.scores[k]}`))
+        .filter(Boolean).join(' ') || '—';
       const p = profile.profile || {};
       if (!p.total) {
         return box({ display: 'flex', flexDirection: 'column', gap: 12, alignItems: 'flex-start' },
@@ -1156,7 +1280,21 @@ function VerdictView({ graded, tokens, onShowAnswer, showAnswer, structure }) {
               r.answered ? `${r.accuracy}%（${r.hit}/${r.answered}）` : '未测')))),
         p.dominant ? box({ ...cardStyle, padding: 12 },
           box({ fontSize: 14 }, `最常卡在：${LAYER_NAME[p.dominant[0]] || p.dominant[0]}`),
-          box({ ...small, marginTop: 3 }, `占总诊断的 ${Math.round((p.dominant[1] / p.total) * 100)}%`)) : null
+          box({ ...small, marginTop: 3 }, `占总诊断的 ${Math.round((p.dominant[1] / p.total) * 100)}%`)) : null,
+        /* 历史列表：点一条看当次分数与卡点；有明细的还能回放「你当时怎么标的」 */
+        (profile.records || []).length ? box({},
+          box(sectionTitle, '批改历史'),
+          box({ display: 'flex', flexDirection: 'column' },
+            ...(profile.records || []).slice().reverse().slice(0, 30).map((r, i) => box({
+              key: i, display: 'flex', gap: 8, alignItems: 'baseline', padding: '5px 0',
+              borderBottom: '1px solid ' + T.border
+            },
+              text({ flex: '0 0 88px', fontSize: 11.5, color: T.label3 }, String(r.ts || '').replace('T', ' ').slice(5, 16)),
+              box({ flex: 1, fontSize: 12, color: T.label1, wordBreak: 'break-word' }, String(r.sentence || '').slice(0, 90)),
+              text({ flex: '0 0 auto', fontSize: 11.5, color: T.label3 }, scoreLine(r)),
+              btn(false, r.hasDetail ? '回放' : '仅分数', () => openRecord(r), { disabled: recLoading })))),
+          box({ ...small, marginTop: 4 }, '回放显示的是当次的标注与批改，不会改动你现在的作业。')) : null,
+        openedRec ? box({ marginTop: 4 }, AttemptDetail({ attempt: openedRec })) : null
       );
     }
 
@@ -1191,8 +1329,26 @@ function VerdictView({ graded, tokens, onShowAnswer, showAnswer, structure }) {
       const [paperIndex, setPaperIndex] = useState(0);
       const [llmReady, setLlmReady] = useState(null);
       const [error, setError] = useState('');
+      /* 当前句的批改历史（左侧栏常驻列出）与正在回放的那一条 */
+      const [sentenceAttempts, setSentenceAttempts] = useState([]);
+      const [replayTs, setReplayTs] = useState(null);
 
-      const tokens = structure?.tokens ?? [];
+      /* 当前正文的 ref：loadPaper 恢复进度时要按「此刻显示的那句」定位，
+        用闭包里的 sentence 会拿到首次渲染的空值 */
+      const sentenceRef = useRef('');
+      useEffect(() => { sentenceRef.current = sentence; }, [sentence]);
+      /* 句子文本比较：切句与模型回传可能差在引号/空白上，直接 === 会误判成「不在本文」 */
+      const normSent = (s) => String(s ?? '')
+        .replace(/[\u2018\u2019]/g, "'")
+        .replace(/[\u201C\u201D]/g, '"')
+        .replace(/\s+/g, ' ')
+        .trim();
+      /* 标注页不依赖结构分析：没有 structure 时按空格本地切词。
+         这与后端 tokenize() 完全一致，批改时下标天然对齐 ——
+         所以「先自己拆一遍」不该被「必须先分析」拦在门外。 */
+      const tokens = structure?.tokens ?? (String(sentence ?? '').trim()
+        ? String(sentence).trim().split(/\s+/)
+        : []);
 
       const loadStatus = useCallback(async () => {
         try { const r = await apiGet('/status'); setLlmReady(r.llm); } catch { setLlmReady({ ready: false, reason: '状态未知' }); }
@@ -1310,6 +1466,12 @@ function VerdictView({ graded, tokens, onShowAnswer, showAnswer, structure }) {
           setWords((prev) => [...prev, { start: span.start, end: span.end + 1, guess: wordGuess.trim() }]);
           setWordGuess('');
         },
+        /* 只标记、不猜义：不确定时先画个 [?]，别编一个意思填进去——
+           编出来的假义会污染整句译文（这是实测里最容易出事的一步）。 */
+        commitMark: (span) => {
+          setWords((prev) => [...prev, { start: span.start, end: span.end + 1, guess: '', unknown: true }]);
+          setWordGuess('');
+        },
         removeWord: (i) => setWords((prev) => prev.filter((_, x) => x !== i)),
         setGuess: setWordGuess,
         setTranslation: setTranslation,
@@ -1323,28 +1485,49 @@ function VerdictView({ graded, tokens, onShowAnswer, showAnswer, structure }) {
 
       
       const runGrade = useCallback(async () => {
-        if (!structure) return;
+        // 不要求先分析结构：批改接口内部会拿到标准答案再对照
+        const src = String(sentence ?? '').trim();
+        if (!src) return;
         const hasWork = spans.some((x) => x.role) || refs.length || logicPairs.length || words.length || translation.trim();
         if (!hasWork) return;
         setGrading(true);
         setError('');
         try {
           const res = await apiPost('/annotate', {
-            sentence: structure.sentence,
+            sentence: src,
             spans: spans.filter((x) => x.role).map((x) => ({ start: x.start, end: x.end, role: x.role })),
             refs: refs.map((r) => ({ pron: r.pron, target: r.target })),
             logic: logicPairs.map((p) => ({ trigger: p.trigger, scope: p.scope })),
-            words: words.map((w) => ({ start: w.start, end: w.end, guess: w.guess })),
+            words: words.map((w) => ({ start: w.start, end: w.end, guess: w.guess, unknown: w.unknown === true })),
             translation
           });
           if (!res.ok) { setError(res.error || '批改失败'); return; }
-          setGraded(res);
-          setStep('verdict');
+          // 批改接口内部已经算过标准答案：顺手填进结构数据，
+          // 省掉「批改完还得再点一次分析这一句」这一步
+          setStructure((prev) => {
+            if (prev?.parts?.length) return prev;
+            const covSet = new Set();
+            const walk = (arr) => (arr || []).forEach((p) => {
+              for (let i = p?.start ?? 0; i < (p?.end ?? 0); i += 1) covSet.add(i);
+              walk(p?.children);
+            });
+            walk(res.answer);
+            const total = (res.tokens || []).length;
+            return {
+              sentence: res.sentence,
+              tokens: res.tokens || [],
+              translation: res.translation,
+              parts: res.answer || [],
+              cached: true,
+              coverage: { covered: covSet.size, total, ratio: total ? covSet.size / total : 0 }
+            };
+          });
+          /* 切到结果页放到「写完记录」之后：结果页挂载时会拉本句的批改历史 */
           setShowAnswer(false);
           // 只把「测到的层」计入画像；选择题那套已经废弃，画像只认标注批改
           try {
             await apiPost('/record', {
-              sentence: structure.sentence,
+              sentence: src,
               layers: res.layers || {},
               primary: res.primary || undefined,
               wrongLayers: res.wrongLayers || [],
@@ -1354,15 +1537,35 @@ function VerdictView({ graded, tokens, onShowAnswer, showAnswer, structure }) {
                 L: res.L?.score ?? null,
                 V: res.V?.score ?? null,
                 E: res.E?.score ?? null
+              },
+              /* 明细一起存：以后「③ 结果」和「④ 画像」都能回放这一次是怎么标的、批改怎么说 */
+              detail: {
+                tokens: tokens.slice(0, 120),
+                spans: spans.filter((x) => x.role).map((x) => ({ start: x.start, end: x.end, role: x.role })),
+                refs: refs.map((r) => ({ pron: r.pron, target: r.target })),
+                logic: logicPairs.map((p) => ({ trigger: p.trigger, scope: p.scope })),
+                words: words.map((w) => ({ start: w.start, end: w.end, guess: w.guess, unknown: w.unknown === true })),
+                translation,
+                answer: res.answer || [],
+                overall: res.overall ?? null,
+                verdicts: {
+                  S: res.S?.results ?? [], R: res.R?.results ?? [],
+                  L: res.L?.results ?? [], V: res.V?.results ?? [],
+                  E: res.E?.results ?? null
+                }
               }
             });
           } catch { /* 记录失败不影响批改结果 */ }
+          /* 记录写完再 setGraded：左侧「本句批改」列表会跟着刷新，
+             早于此赋值就会少掉刚做完的这一条 */
+          setGraded(res);
+          setStep('verdict');
         } catch (err) {
           setError(String(err?.message || err));
         } finally {
           setGrading(false);
         }
-      }, [structure, spans, refs, logicPairs, words, translation]);
+      }, [sentence, structure, spans, refs, logicPairs, words, translation]);
 
       const loadProfile = useCallback(async () => {
         try { setProfile(await apiGet('/profile')); } catch (err) { setError(String(err?.message || err)); }
@@ -1376,7 +1579,11 @@ function VerdictView({ graded, tokens, onShowAnswer, showAnswer, structure }) {
           const res = await apiGet('/paper?name=' + encodeURIComponent(name));
           const list = res.sentences || [];
           setPaperSentences(list);
-          setPaperIndex(0);
+          /* 恢复进度：当前正文若在这篇里就定位到它，否则才归零。
+             以前无条件归零，会让「1/19」与实际显示的那句脱节，点下一句就跳到第 2 句 */
+          const keep = normSent(sentenceRef.current);
+          const at = keep ? list.findIndex((x) => normSent(x.text) === keep) : -1;
+          setPaperIndex(at >= 0 ? at : 0);
           try {
             const c = await apiPost('/structure/cached', { sentences: list.map((x) => x.text) });
             setAnalyzed(c.analyzed || []);
@@ -1432,9 +1639,59 @@ function VerdictView({ graded, tokens, onShowAnswer, showAnswer, structure }) {
       useEffect(() => { loadStatus(); }, [loadStatus]);
       useEffect(() => { if (source === 'paper' && !papers.length) loadPapers(); }, [source, papers.length, loadPapers]);
       useEffect(() => { if (step === 'profile' && !profile) loadProfile(); }, [step, profile, loadProfile]);
+      /* 换句或批改完成都重新拉「本句批改历史」——左侧栏常驻，切句回来不会丢 */
+      useEffect(() => {
+        let alive = true;
+        const s = String(sentence || '').trim();
+        if (!s) { setSentenceAttempts([]); return () => { alive = false; }; }
+        setReplayTs(null);
+        (async () => {
+          try {
+            const res = await apiPost('/attempts', { sentence: s });
+            if (alive) setSentenceAttempts(res.attempts || []);
+          } catch { if (alive) setSentenceAttempts([]); }
+        })();
+        return () => { alive = false; };
+      }, [sentence, graded]);
+
+      /** 点历史条目：用记录里的明细还原出「当次结果」，直接走结果页那套 UI */
+      const replayAttempt = useCallback((a) => {
+        const d = a && a.detail;
+        const sc = (a && a.scores) || {};
+        const nums = ['S', 'R', 'L', 'V', 'E'].map((k) => sc[k]).filter((x) => typeof x === 'number');
+        const overall = (d && d.overall != null) ? d.overall : (nums.length ? Math.round(nums.reduce((s, x) => s + x, 0) / nums.length) : null);
+        const v = (d && d.verdicts) || {};
+        setReplayTs(a.ts);
+        setGraded({
+          sentence: a.sentence,
+          tokens: (d && d.tokens) || [],
+          answer: (d && d.answer) || [],
+          translation: (d && d.translation) || '',
+          overall,
+          layers: a.layers || {},
+          S: { results: v.S || [], score: sc.S ?? null },
+          R: { results: v.R || [], score: sc.R ?? null },
+          L: { results: v.L || [], score: sc.L ?? null },
+          V: { results: v.V || [], score: sc.V ?? null },
+          E: { results: v.E || null, score: sc.E ?? null }
+        });
+        setStructure((d && d.answer && d.answer.length)
+          ? { sentence: a.sentence, tokens: d.tokens || [], translation: d.translation || '', parts: d.answer }
+          : null);
+        setShowAnswer(false);
+        setStep('verdict');
+        /* 旧记录没有明细：分数与卡点照常显示，只是看不到当时的标注内容 */
+        setError(d ? '' : '这条是旧格式记录：只有分数与卡点，没有保存当时的标注明细。');
+      }, []);
 
       const steps = [['structure', '① 结构'], ['annotate', '② 标注'], ['verdict', '③ 结果'], ['profile', '④ 画像']];
       const currentPaper = paperSentences[paperIndex];
+      /* 翻页锚点以「当前正文」为准，paperIndex 只当回退值：
+         手动输入的句子、或恢复时留下的陈旧索引，都会让索引与实际显示的那句脱节，
+         按索引翻页就会跳到别处（显示第 1 句、实际是文章第 7 句）。 */
+      const anchorIdx = paperSentences.findIndex((x) => normSent(x.text) === normSent(sentence));
+      const inPaper = anchorIdx >= 0;
+      const navBase = inPaper ? anchorIdx : paperIndex;
 
       // 即使 renderMain 自身同步抛错，也退化成错误卡片而不是白屏
       const safeMain = () => {
@@ -1458,7 +1715,7 @@ function VerdictView({ graded, tokens, onShowAnswer, showAnswer, structure }) {
         }
         if (step === 'verdict') {
           return h(VerdictView, {
-            graded, tokens, structure,
+            graded, tokens, structure, sentence,
             onShowAnswer: () => setShowAnswer((v) => !v),
             showAnswer
           });
@@ -1544,11 +1801,11 @@ function VerdictView({ graded, tokens, onShowAnswer, showAnswer, structure }) {
                 onChange: (e) => { setPaperName(e.target.value); loadPaper(e.target.value); },
                 style: { ...inputStyle, flex: '0 0 160px', height: 27 }
               }, papers.map((p) => h('option', { key: p.name, value: p.name }, `${p.title} (${p.sentences})`))),
-              paperSentences.length ? box({ display: 'flex', gap: 4, alignItems: 'center' },
-                btn(false, '上一句', () => goToSentence(Math.max(0, paperIndex - 1))),
-                text({ ...small, padding: '0 4px' }, `${paperIndex + 1}/${paperSentences.length}`),
-                btn(false, '下一句', () => goToSentence(Math.min(paperSentences.length - 1, paperIndex + 1)))) : null,
-              currentPaper && structure ? btn(false, '← 句子列表', () => {
+              paperSentences.length && String(sentence).trim() ? box({ display: 'flex', gap: 4, alignItems: 'center' },
+                btn(false, '上一句', () => goToSentence(Math.max(0, navBase - 1)), { disabled: !inPaper || navBase === 0 }),
+                text({ ...small, padding: '0 4px' }, inPaper ? `${anchorIdx + 1}/${paperSentences.length}` : `不在本文 · ${paperIndex + 1}/${paperSentences.length}`),
+                btn(false, '下一句', () => goToSentence(Math.min(paperSentences.length - 1, navBase + 1)), { disabled: !inPaper || navBase >= paperSentences.length - 1 })) : null,
+              paperSentences.length ? btn(false, '← 句子列表', () => {
                 setStructure(null);
                 setGraded(null);
                 setSentence('');
@@ -1574,10 +1831,25 @@ function VerdictView({ graded, tokens, onShowAnswer, showAnswer, structure }) {
                 color: step === key ? T.label1 : T.label2
               }
             }, label)),
+            /* 本句批改历史：常驻在左侧，切句再回来也不丢；点一条即回放当次结果 */
+            sentenceAttempts.length ? box({ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 4 },
+              box({ fontSize: 11, color: T.label3, marginBottom: 2 }, `本句批改（${sentenceAttempts.length}）`),
+              ...sentenceAttempts.slice().reverse().map((a, i) => h('button', {
+                key: 'h' + i, type: 'button',
+                onClick: () => replayAttempt(a),
+                title: a.detail ? '回放这一次的标注与批改' : '旧记录，只有分数',
+                style: {
+                  textAlign: 'left', padding: '5px 8px', borderRadius: 6, cursor: 'pointer',
+                  fontSize: 11.5, font: 'inherit', lineHeight: '17px',
+                  border: '1px solid ' + (replayTs === a.ts ? T.accent : T.border),
+                  background: replayTs === a.ts ? mix(T.accent, 12) : 'transparent',
+                  color: replayTs === a.ts ? T.label1 : T.label2
+                }
+              }, `第 ${a.seq} 次 · ${['S', 'R', 'L', 'V', 'E'].map((k) => (a.scores?.[k] == null ? null : k + a.scores[k])).filter(Boolean).join(' ') || '—'}`))) : null,
             graded ? box({ marginTop: 14, display: 'flex', flexDirection: 'column', gap: 3 },
-              box(tinyLabel, '本句得分'),
-              box({ fontSize: 20, fontWeight: 700 }, String(graded.score)),
-              box({ ...small }, `覆盖 ${graded.coverage}% · 准确 ${graded.precision}%`)) : null,
+              box(tinyLabel, replayTs ? '回放·当次总分' : '本句得分'),
+              box({ fontSize: 20, fontWeight: 700 }, String(graded.overall ?? graded.score ?? '—')),
+              graded.coverage != null ? box({ ...small }, `覆盖 ${graded.coverage}% · 准确 ${graded.precision}%`) : null) : null,
             (spans.length + refs.length + logicPairs.length + words.length + (translation.trim() ? 1 : 0))
               ? box({ marginTop: 12, ...small }, `已填 ${spans.length + refs.length + logicPairs.length + words.length + (translation.trim() ? 1 : 0)} 项`)
               : null),
@@ -1593,7 +1865,16 @@ function VerdictView({ graded, tokens, onShowAnswer, showAnswer, structure }) {
     function HintBlock({ hints }) {
       if (!hints) return null;
       const rows = [];
-      (hints.phrases || []).forEach((p) => rows.push(['搭配整体义', `${p.phrase} = ${p.meaning}`]));
+      /* 固定块：逐词拼不出来的东西，紧跟风险提示单独成块（L3 形式冻结 / L2 粘合搭配） */
+      const fixedRows = [];
+      (hints.fixed || []).forEach((x) => fixedRows.push([
+        `${x.level || 'L3'} ${x.kind || '固定句式'}`,
+        `${x.text} = ${x.meaning}`,
+        x.note || ''
+      ]));
+      (hints.phrases || []).forEach((p) => fixedRows.push(['L2 固定搭配', `${p.phrase} = ${p.meaning}`, '']));
+      /* 特殊句式：结构被改过、必须还原语序才能读（倒装 / 强调 / 省略 / 独立主格）*/
+      const specialRows = (hints.special || []).map((x) => [x.kind || '特殊句式', x.text || '', x.why || '', x.fix || '']);
       (hints.hiddenSenses || []).forEach((p) => rows.push(['熟词僻义', `${p.word}：${p.sense}`]));
       (hints.academic || []).forEach((p) => rows.push(['学术词义项', `${p.word}：${p.sense}`]));
       if ((hints.negations || []).length) rows.push(['否定', `${hints.negations.join('、')} —— 先确定管到哪`]);
@@ -1601,13 +1882,32 @@ function VerdictView({ graded, tokens, onShowAnswer, showAnswer, structure }) {
       (hints.inversion || []).forEach((x) => rows.push(['倒装/特殊句式', x]));
       (hints.cleft || []).forEach((x) => rows.push(['特殊句式', x]));
       if (hints.passive) rows.push(['被动', '中文可改主动，或加「被/受到/得到」']);
-      if (!rows.length) return null;
-      return box({ marginTop: 6 },
+      /* rows 为空时也要能只显示固定块，所以空判定挪到最后 */
+      const warnBlock = rows.length ? box({ marginTop: 6 },
         box(sectionTitle, '风险提示（查了词还是译不出的常见原因）'),
         box({ display: 'flex', flexDirection: 'column', gap: 5 },
           rows.map(([k, v], i) => box({ key: i, display: 'flex', gap: 10, alignItems: 'baseline' },
             text({ flex: '0 0 auto', fontSize: 12, color: T.warn }, k),
-            text({ ...body, flex: 1 }, v)))));
+            text({ ...body, flex: 1 }, v))))) : null;
+      const fixedBlock = fixedRows.length ? box({ marginTop: warnBlock ? 12 : 0 },
+        box(sectionTitle, '固定句式 / 固定短语（整块读，别逐词拼）'),
+        box({ display: 'flex', flexDirection: 'column', gap: 6 },
+          fixedRows.map(([k, v, note], i) => box({ key: i, display: 'flex', flexDirection: 'column', gap: 2 },
+            box({ display: 'flex', gap: 10, alignItems: 'baseline' },
+              text({ flex: '0 0 auto', fontSize: 12, color: T.accent }, k),
+              text({ ...body, flex: 1 }, v)),
+            note ? text({ fontSize: 12, color: T.label3, lineHeight: '18px' }, note) : null)))) : null;
+      if (!warnBlock && !fixedBlock && !specialRows.length) return null;
+      const specialBlock = specialRows.length ? box({ marginTop: 12 },
+        box(sectionTitle, '特殊句式（先还原语序再读）'),
+        box({ display: 'flex', flexDirection: 'column', gap: 7 },
+          specialRows.map(([kind, snippet, why, fix], i) => box({ key: i, display: 'flex', flexDirection: 'column', gap: 2 },
+            box({ display: 'flex', gap: 8, alignItems: 'baseline' },
+              text({ flex: '0 0 auto', fontSize: 12, color: T.warn }, kind),
+              text({ flex: 1, fontSize: 12.5, color: T.label1, wordBreak: 'break-word' }, snippet || why)),
+            why && snippet ? text({ fontSize: 12, color: T.label3, lineHeight: '18px' }, `判据：${why}`) : null,
+            fix ? text({ fontSize: 12, color: T.accent, lineHeight: '18px' }, `怎么读：${fix}`) : null)))) : null;
+      return box(null, warnBlock, fixedBlock, specialBlock);
     }
 
     return {
