@@ -950,7 +950,9 @@ function RangeSentence({
         (() => {
           if (!showLogic) {
             return box({ ...small, marginTop: 6, color: T.label3 },
-              '③ 逻辑：本句没有容易读反的否定结构（not…because / not all / 否定前移 / not until / 准否定词），这一项跳过。');
+              work.probes
+                ? '③ 逻辑：本句没有容易读反的否定结构（not…because / not all / 否定前移 / not until / 准否定词），这一项跳过。'
+                : '③ 逻辑：暂时没取到本句的规则检查结果（不影响你自己标注，刷新或重新选句会重试）。');
           }
           return box(null,
         sep('③ 逻辑', (work.probes.scopeHints || []).length
@@ -1238,6 +1240,140 @@ function VerdictView({ graded, tokens, onShowAnswer, showAnswer, structure, sent
           : null);
     }
 
+    /* ── 生词模式 ────────────────────────────────────────────────── */
+    /* 词表分级：0=当前生词，1..maxLevel=N 级熟练。
+       记住了 → 升一级；没记住 → 直接退回 0 级（后端 /vocab/move 落盘）。 */
+    const VOCAB_PAGE = 50;
+    function VocabView() {
+      const [words, setWords] = useState(null);
+      const [maxLevel, setMaxLevel] = useState(3);
+      const [tab, setTab] = useState(0);
+      const [shown, setShown] = useState(VOCAB_PAGE);
+      const [cover, setCover] = useState(false);
+      const [onlySnoozed, setOnlySnoozed] = useState(false); // 只看今天推迟的
+      const [peek, setPeek] = useState({});
+      const [err, setErr] = useState('');
+
+      const load = useCallback(async () => {
+        setErr('');
+        try {
+          const r = await apiGet('/vocab');
+          setWords(r.words || []);
+          setMaxLevel(r.maxLevel || 3);
+        } catch (e) { setErr(String(e.message || e)); }
+      }, []);
+      useEffect(() => { load(); }, [load]);
+
+      const move = async (w, action) => {
+        const prev = { level: w.level, misses: w.misses, snoozed: w.snoozed };
+        let next;
+        if (action === 'know') next = { level: Math.min(maxLevel, prev.level + 1), misses: 0, snoozed: false };
+        else if (action === 'forget') next = { level: 0, misses: prev.misses + 1, snoozed: false };
+        else next = { level: prev.level, misses: prev.misses + 1, snoozed: true };
+        if (action === 'know' && next.level === prev.level) return;
+        // 先改界面再落盘；失败就退回去，别让界面和磁盘对不上
+        setWords((list) => list.map((x) => (x.word === w.word ? { ...x, ...next } : x)));
+        try { await apiPost('/vocab/move', { word: w.word, action }); }
+        catch (e) {
+          setWords((list) => list.map((x) => (x.word === w.word ? { ...x, ...prev } : x)));
+          setErr('保存失败：' + String(e.message || e));
+        }
+      };
+
+      if (!words) {
+        return box({ display: 'flex', flexDirection: 'column', gap: 10, alignItems: 'flex-start' },
+          box(body, err ? '生词表读取失败：' + err : '载入生词表…'),
+          err ? btn(false, '重试', load) : null);
+      }
+
+      const tabs = [];
+      for (let lv = 0; lv <= maxLevel; lv++) {
+        tabs.push([lv, lv === 0 ? '当前生词' : `${lv}级熟练`, words.filter((x) => x.level === lv && !x.snoozed).length]);
+      }
+      // 点了「下次再记」的词今天不出现，过了本机零点自动回来
+      const snoozedHere = words.filter((x) => x.level === tab && x.snoozed).length;
+      // 推迟的词都处理完后自动退出「只看推迟」，免得停在一个空页面
+      const viewSnoozed = onlySnoozed && snoozedHere > 0;
+      const list = words.filter((x) => x.level === tab && (viewSnoozed ? x.snoozed : !x.snoozed));
+      const visible = list.slice(0, shown);
+
+      const actionBtn = (label, color, onClick, disabled) => h('button', {
+        type: 'button', onClick, disabled,
+        style: {
+          height: 26, padding: '0 10px', borderRadius: 6, font: 'inherit', fontSize: 12,
+          cursor: disabled ? 'not-allowed' : 'pointer', opacity: disabled ? 0.4 : 1,
+          border: '1px solid ' + color, background: mix(color, 10), color: T.label1, whiteSpace: 'nowrap'
+        }
+      }, label);
+
+      return box({ display: 'flex', flexDirection: 'column', gap: 12 },
+        box({ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' },
+          tabs.map(([lv, label, n]) => h('button', {
+            key: lv, type: 'button',
+            onClick: () => { setTab(lv); setShown(VOCAB_PAGE); setOnlySnoozed(false); },
+            style: {
+              height: 30, padding: '0 14px', borderRadius: 6, font: 'inherit', fontSize: 13, cursor: 'pointer',
+              border: '1px solid ' + (tab === lv ? T.accent : T.border),
+              background: tab === lv ? mix(T.accent, 14) : 'transparent',
+              color: tab === lv ? T.label1 : T.label2
+            }
+          }, `${label}（${n}）`)),
+          box({ flex: 1 }),
+          btn(false, '重新载入', load),
+          btn(false, cover ? '显示释义' : '遮住释义', () => { setCover((v) => !v); setPeek({}); })),
+        box(small, tab === 0
+          ? '记住了点「记住」升到 1 级熟练；还没记住就留在这里。'
+          : `记得住点「记住」再升一级${tab >= maxLevel ? '（已是最高级，不再升）' : ''}；这次没想起来点「忘了」，回到当前生词重新记。`),
+        snoozedHere ? box({ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' },
+          text({ ...small }, viewSnoozed
+            ? `正在看今天推迟的 ${snoozedHere} 个；这里点「记住」「忘了」会照常处理，明天它们也会回到词表。`
+            : `今天已推迟 ${snoozedHere} 个（点了「下次再记」），明天再出现。`),
+          btn(false, viewSnoozed ? '← 回到词表' : `查看今天推迟的（${snoozedHere}）`, () => { setOnlySnoozed((v) => !v); setShown(VOCAB_PAGE); }, null)) : null,
+        err ? text({ ...small, color: T.bad }, err) : null,
+        list.length === 0
+          ? box({ ...body, padding: '28px 0', textAlign: 'center' }, tab === 0 ? (snoozedHere ? '今天的生词都处理完了，推迟的明天再来。' : '当前生词已清空 🎉') : '这一级还没有词。')
+          : box({ display: 'flex', flexDirection: 'column', gap: 6 },
+            visible.map((w) => {
+              const hidden = cover && !peek[w.word];
+              return h('div', {
+                key: w.word,
+                /* 整行右击 = 记住（等同「✓ 记住」），顺手把浏览器右键菜单压掉 */
+                onContextMenu: (e) => { e.preventDefault(); if (w.level < maxLevel) move(w, 'know'); },
+                title: '右击这一行 = 记住',
+                style: {
+                  display: 'flex', alignItems: 'center', gap: 12, padding: '8px 12px',
+                  /* 没记住的次数越多越红：每次 +9%，封顶 54%（6 次起一样红） */
+                  border: '1px solid ' + (w.misses ? mix(T.bad, Math.min(70, 25 + w.misses * 9)) : T.border),
+                  borderRadius: 8,
+                  background: w.misses ? `color-mix(in srgb, ${T.bad} ${Math.min(54, w.misses * 9)}%, ${T.bg2})` : T.bg2
+                }
+              },
+                text({ flex: '0 0 170px', fontSize: 15, fontWeight: 600, color: T.label1, wordBreak: 'break-all' }, w.word),
+                text({ flex: '0 0 34px', fontSize: 11, color: T.label3 }, `×${w.count}`),
+                h('span', {
+                  /* 按住才显示，松开 / 移出 / 取消都立刻重新遮住 */
+                  onPointerDown: (e) => { if (cover && e.button === 0) setPeek((p) => ({ ...p, [w.word]: true })); },
+                  onPointerUp: () => setPeek((p) => (p[w.word] ? { ...p, [w.word]: false } : p)),
+                  onPointerLeave: () => setPeek((p) => (p[w.word] ? { ...p, [w.word]: false } : p)),
+                  onPointerCancel: () => setPeek((p) => (p[w.word] ? { ...p, [w.word]: false } : p)),
+                  title: cover ? '左键按住显示释义，松开隐藏；右击 = 记住' : '右击这一行 = 记住',
+                  style: {
+                    flex: 1, minWidth: 0, fontSize: 13, lineHeight: '20px', color: T.label2,
+                    cursor: cover ? 'pointer' : 'default', filter: hidden ? 'blur(6px)' : 'none', touchAction: 'manipulation',
+                    userSelect: hidden ? 'none' : 'auto'
+                  }
+                }, w.meaning || '（暂无释义）'),
+                box({ display: 'flex', gap: 6, flex: '0 0 auto', alignItems: 'center' },
+                  w.misses ? text({ fontSize: 11, color: T.bad, marginRight: 4, whiteSpace: 'nowrap' }, `没记住 ${w.misses} 次`) : null,
+                  w.snoozed ? null : actionBtn('下次再记', T.warn, () => move(w, 'later')),
+                  w.level > 0 ? actionBtn('✗ 忘了', T.bad, () => move(w, 'forget')) : null,
+                  actionBtn(w.level >= maxLevel ? '✓ 已满级' : '✓ 记住', T.ok, () => move(w, 'know'), w.level >= maxLevel)));
+            })),
+        list.length > shown
+          ? box({ display: 'flex', justifyContent: 'center' }, btn(false, `再显示 ${Math.min(VOCAB_PAGE, list.length - shown)} 个（剩 ${list.length - shown}）`, () => setShown((n) => n + VOCAB_PAGE)))
+          : null);
+    }
+
     /* ── ④ 画像 ──────────────────────────────────────────────────── */
     function ProfileView({ profile, onReload }) {
       if (!profile) {
@@ -1306,6 +1442,9 @@ function VerdictView({ graded, tokens, onShowAnswer, showAnswer, structure, sent
       const [loading, setLoading] = useState(false);
       const [ruleHints, setRuleHints] = useState(null);
       const [probes, setProbes] = useState(null);
+      /* 规则引擎给的 probes（代词候选 / 否定范围），不花钱、不调模型。
+         结构接口的 probes 优先，没有就用这一份 —— 保证「不分析也能练指代和逻辑」。 */
+      const [ruleProbes, setRuleProbes] = useState(null);
       const [picked, setPicked] = useState(null);
       const [spans, setSpans] = useState([]);
       const [refs, setRefs] = useState([]);
@@ -1398,6 +1537,7 @@ function VerdictView({ graded, tokens, onShowAnswer, showAnswer, structure, sent
         setStructure(null);
         setStructureError('');
         setRuleHints(null);
+        setProbes(null);      // 旧句的代词候选必须一起清掉，否则会串到下一句
         setSpans([]);
         setRefs([]); setRefPending(null);
         setLogicPairs([]); setLogicPending(null);
@@ -1639,6 +1779,23 @@ function VerdictView({ graded, tokens, onShowAnswer, showAnswer, structure, sent
       useEffect(() => { loadStatus(); }, [loadStatus]);
       useEffect(() => { if (source === 'paper' && !papers.length) loadPapers(); }, [source, papers.length, loadPapers]);
       useEffect(() => { if (step === 'profile' && !profile) loadProfile(); }, [step, profile, loadProfile]);
+      /* 切句时用规则引擎取一次 probes（1ms、不花钱、不调模型）：
+         这样即便这一句没分析过，指代候选与逻辑提示也能直接用。 */
+      useEffect(() => {
+        let alive = true;
+        const s = String(sentence || '').trim();
+        /* 先把旧结果清掉：切句瞬间若还留着上一句的 probes，
+           界面会先渲染成「本句代词：that」这种完全不准的提示。 */
+        setRuleProbes(null);
+        if (!s) { return () => { alive = false; }; }
+        (async () => {
+          try {
+            const res = await apiPost('/analyze', { sentence: s });
+            if (alive && res.ok) setRuleProbes(res.probes || null);
+          } catch { if (alive) setRuleProbes(null); }
+        })();
+        return () => { alive = false; };
+      }, [sentence]);
       /* 换句或批改完成都重新拉「本句批改历史」——左侧栏常驻，切句回来不会丢 */
       useEffect(() => {
         let alive = true;
@@ -1707,7 +1864,7 @@ function VerdictView({ graded, tokens, onShowAnswer, showAnswer, structure, sent
         if (step === 'annotate') {
           return h(AnnotateView, {
             tokens,
-            work: { spans, refs, refPending, logicPairs, logicPending, words, wordGuess, translation, pickedRange, probes },
+            work: { spans, refs, refPending, logicPairs, logicPending, words, wordGuess, translation, pickedRange, probes: probes || ruleProbes },
             actions,
             onGrade: runGrade,
             grading
@@ -1721,6 +1878,7 @@ function VerdictView({ graded, tokens, onShowAnswer, showAnswer, structure, sent
           });
         }
         if (step === 'profile') return h(ProfileView, { profile, onReload: loadProfile });
+        if (step === 'vocab') return h(VocabView, null);
 
         if (structure || loading || structureError) {
           return h(StructureView, {
@@ -1748,12 +1906,13 @@ function VerdictView({ graded, tokens, onShowAnswer, showAnswer, structure, sent
             box({ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 10, gap: 12, flexWrap: 'wrap' },
               box(sectionTitle, `${paperName} · 共 ${paperSentences.length} 句`),
               text({ ...small }, analyzed.length
-                ? `${analyzed.length} 句已分析（点开秒出） · 其余点开即分析`
-                : '点任意一句直接分析')),
+                ? `${analyzed.length} 句已分析（点开秒出） · 其余点一句先选中，再点「分析这一句」`
+                : '点一句先选中它，再按「分析这一句」—不会自动花 token')),
             box({ display: 'flex', flexDirection: 'column', gap: 5 },
               paperSentences.map((s, i) => h('button', {
                 key: i, type: 'button',
-                onClick: () => { setPaperIndex(i); setSentence(s.text); analyze(s.text); },
+                /* 只选中，不自动分析：简单句可能不需要模型，别替用户决定花不花这一次调用 */
+                onClick: () => { setPaperIndex(i); setSentence(s.text); },
                 style: {
                   textAlign: 'left', padding: '8px 11px', borderRadius: 6, cursor: 'pointer',
                   border: '1px solid ' + (i === paperIndex ? T.accent : T.border),
@@ -1801,10 +1960,12 @@ function VerdictView({ graded, tokens, onShowAnswer, showAnswer, structure, sent
                 onChange: (e) => { setPaperName(e.target.value); loadPaper(e.target.value); },
                 style: { ...inputStyle, flex: '0 0 160px', height: 27 }
               }, papers.map((p) => h('option', { key: p.name, value: p.name }, `${p.title} (${p.sentences})`))),
-              paperSentences.length && String(sentence).trim() ? box({ display: 'flex', gap: 4, alignItems: 'center' },
-                btn(false, '上一句', () => goToSentence(Math.max(0, navBase - 1)), { disabled: !inPaper || navBase === 0 }),
-                text({ ...small, padding: '0 4px' }, inPaper ? `${anchorIdx + 1}/${paperSentences.length}` : `不在本文 · ${paperIndex + 1}/${paperSentences.length}`),
-                btn(false, '下一句', () => goToSentence(Math.min(paperSentences.length - 1, navBase + 1)), { disabled: !inPaper || navBase >= paperSentences.length - 1 })) : null,
+              paperSentences.length ? box({ display: 'flex', gap: 4, alignItems: 'center' },
+                btn(false, '上一句', () => goToSentence(Math.max(0, navBase - 1)), { disabled: navBase === 0 }),
+                text({ ...small, padding: '0 4px' }, inPaper
+                  ? `${anchorIdx + 1}/${paperSentences.length}`
+                  : (String(sentence).trim() ? `不在本文 · ${paperIndex + 1}/${paperSentences.length}` : `${paperIndex + 1}/${paperSentences.length}`)),
+                btn(false, '下一句', () => goToSentence(Math.min(paperSentences.length - 1, navBase + 1)), { disabled: navBase >= paperSentences.length - 1 })) : null,
               paperSentences.length ? btn(false, '← 句子列表', () => {
                 setStructure(null);
                 setGraded(null);
@@ -1831,6 +1992,19 @@ function VerdictView({ graded, tokens, onShowAnswer, showAnswer, structure, sent
                 color: step === key ? T.label1 : T.label2
               }
             }, label)),
+            /* 生词模式：和句子无关，单独成组，放在四个步骤下面 */
+            box({ marginTop: 10, paddingTop: 10, borderTop: '1px solid ' + T.border },
+              h('button', {
+                type: 'button',
+                onClick: () => setStep('vocab'),
+                style: {
+                  width: '100%', textAlign: 'left', padding: '7px 9px', borderRadius: 6, cursor: 'pointer',
+                  fontSize: 13, font: 'inherit',
+                  border: '1px solid ' + (step === 'vocab' ? T.accent : 'transparent'),
+                  background: step === 'vocab' ? mix(T.accent, 12) : 'transparent',
+                  color: step === 'vocab' ? T.label1 : T.label2
+                }
+              }, '生词模式')),
             /* 本句批改历史：常驻在左侧，切句再回来也不丢；点一条即回放当次结果 */
             sentenceAttempts.length ? box({ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 4 },
               box({ fontSize: 11, color: T.label3, marginBottom: 2 }, `本句批改（${sentenceAttempts.length}）`),
